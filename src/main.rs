@@ -18,15 +18,17 @@
 extern crate log;
 extern crate env_logger;
 extern crate glob;
+extern crate daemonize;
 
 use regex::Regex;
 use self::glob::glob;
 use std::path::{Path};
 use std::{fs, io, thread, time};
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Read};
+use std::io::{Seek, SeekFrom, Read, Write};
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
+use daemonize::Daemonize;
 
 struct SensorData {
     pub id: String,
@@ -35,7 +37,9 @@ struct SensorData {
 }
 
 fn get_sensor_dirs() -> Vec<String> {
-    let base = "C:\\Users\\13355\\Desktop\\kure\\";
+    // FIXME: once you have real hardware working, change the basedir
+    // appropriately.
+    let base = "/home/rjh/kure/";
     let mut sensor_dirs: Vec<String> = Vec::new();
 
     // Create a list of directories where we might find sensor data.
@@ -61,6 +65,7 @@ fn get_sensor_dirs() -> Vec<String> {
 
 fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
     lazy_static! {
+        // FIXME: Does this regex work for below-zero temperatures?
         static ref RX: Regex = Regex::new(r#"[a-fA-F0-9]{2}( [a-fA-F0-9]{2}){8} : crc=[a-fA-F0-9]{2} YES\r?\n([a-fA-F0-9]{2}(( [a-fA-F0-9]{2}){7})) [a-fA-F0-9]{2} t=(\d+)"#).unwrap();
     }
     let mut file = match File::open(filename) {
@@ -72,6 +77,11 @@ fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
         Ok(md) => md
     };
     if metadata.len() > 200 {
+        // FIXME: race condition -- what if someone truncates the file 
+        // as we're using it?
+        // 
+        // low priority, because it's unlikely to get exploited, but
+        // really, I should look into it.
         file.seek(SeekFrom::End(200)).unwrap();
     }
     let mut last_200: String = String::new();
@@ -82,17 +92,18 @@ fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
 
     let mut datum = SensorData {
         id: String::from("none"),
-        temperature: 0.0,
+        temperature: -1001.0,
         timestamp: match metadata.modified() {
             Err(_) => {
                 return Err("couldn't get timestamp");
-            }
+            },
             Ok(n) => {
                 let dt: DateTime<Utc> = n.clone().into();
                 dt.to_rfc3339()
             }
         },
     };
+
     for cap in RX.captures_iter(&last_200) {
         datum.id = cap[2].to_string();
         datum.temperature = match cap[5].parse::<f32>() {
@@ -100,7 +111,13 @@ fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
             Ok(val) => val / 1000.0
         };
     }
-    Ok(datum)
+
+    // If we have no valid data, err out.
+    if datum.temperature < -100.0 || datum.temperature > 100.0 {
+        Err("no valid data found") 
+    } else {
+        Ok(datum)
+    }
 }
 
 fn get_sensor_files() -> Vec<String> {
@@ -133,14 +150,45 @@ fn get_sensor_data() -> Vec<SensorData> {
     data
 }
 
+fn make_json() -> String {
+    let mut contents = "{".to_owned();
+    for record in get_sensor_data() {
+        contents.push_str("\n  \"");
+        contents.push_str(&record.id);
+        contents.push_str("\": {\n    \"timestamp\": \"");
+        contents.push_str(&record.timestamp);
+        contents.push_str("\",\n    \"temperature\": ");
+        contents.push_str(&format!("{}", record.temperature));
+        contents.push_str("\n  },");
+    }
+    contents.pop();
+    contents.push_str("\n}");
+    contents
+}
+
 fn main() {
     env_logger::init();
 
-    let minute = time::Duration::from_secs(60);
+    let stdout = File::create("/tmp/kure.stdout").unwrap();
+    let stderr = File::create("/tmp/kure.stderr").unwrap();
+    match Daemonize::new()
+        .working_directory("/tmp")
+        .stdout(stdout)
+        .stderr(stderr)
+        .start() {
+            Err(why) => error!("couldn't daemonize! {}", why),
+            Ok(_) => println!("successfully started!")
+        };
+
     loop {
-        for record in get_sensor_data() {
-            println!("{} {} {}", record.timestamp, record.id, record.temperature);
+        let maybe_file = File::create("kure.json");
+        if maybe_file.is_ok() {
+            let mut file = maybe_file.unwrap();
+            match write!(file, "{}", make_json()) {
+                Err(_) => error!("couldn't write to json"),
+                Ok(_) => ()
+            };
         }
-        thread::sleep(minute);
+        thread::sleep(time::Duration::from_secs(30));
     }
 }
