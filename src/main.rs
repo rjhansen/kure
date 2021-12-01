@@ -123,8 +123,6 @@ fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
 fn get_sensor_files() -> Vec<String> {
     let mut sensor_files: Vec<String> = Vec::new();
 
-    // For each sensor directory, open the file "w1_slave" if it exists and
-    // read the last 200 bytes looking for sensor data.
     for dirname in get_sensor_dirs() {
         let path = Path::new(&dirname).join("w1_slave");
         if path.exists() && path.is_file() {
