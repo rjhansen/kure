@@ -18,7 +18,6 @@
 extern crate log;
 extern crate env_logger;
 extern crate glob;
-extern crate daemonize;
 
 use regex::Regex;
 use self::glob::glob;
@@ -28,7 +27,6 @@ use std::fs::File;
 use std::io::{Read, Write};
 use chrono::Utc;
 use lazy_static::lazy_static;
-use daemonize::Daemonize;
 
 struct SensorData {
     pub id: String,
@@ -147,17 +145,6 @@ fn make_json() -> String {
 
 fn main() {
     env_logger::init();
-    
-    let stdout = File::create("/tmp/kure.stdout").unwrap();
-    let stderr = File::create("/tmp/kure.stderr").unwrap();
-    match Daemonize::new()
-        .working_directory("/tmp")
-        .stdout(stdout)
-        .stderr(stderr)
-        .start() {
-            Err(why) => error!("couldn't daemonize! {}", why),
-            Ok(_) => println!("successfully started!")
-        };
 
     loop {
         let maybe_file = File::create("/tmp/kure.json");
