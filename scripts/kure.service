@@ -1,0 +1,8 @@
+[Unit]
+Description=Monitors all DS18B20 thermosensors on the system
+
+[Service]
+ExecStart=/usr/bin/kure
+
+[Install]
+WantedBy=multi-user.target
