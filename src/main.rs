@@ -61,6 +61,7 @@ fn get_sensor_dirs() -> Vec<String> {
 
 fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
     lazy_static! {
+        static ref IDRX : Regex = Regex::new(r#"^.*/28-([A-Fa-f0-9]+)/.*$"#).unwrap();
         static ref RX: Regex = Regex::new(r#"[a-fA-F0-9]{2}( [a-fA-F0-9]{2}){8} : crc=[a-fA-F0-9]{2} YES\r?\n([a-fA-F0-9]{2}(( [a-fA-F0-9]{2}){7})) [a-fA-F0-9]{2} t=(-?\d+)"#).unwrap();
     }
     let file = match File::open(filename) {
@@ -79,8 +80,11 @@ fn get_sensor_data_from_file(filename: &str) -> Result<SensorData, &str> {
         timestamp: Utc::now().to_rfc3339()
     };
 
+    for ident in IDRX.captures_iter(&filename) {
+        datum.id = ident[1].to_string();
+    }
+
     for cap in RX.captures_iter(&record) {
-        datum.id = cap[2].to_string();
         datum.temperature = match cap[5].parse::<f32>() {
             Err(_) => return Err("not a valid temperature"),
             Ok(val) => val / 1000.0
@@ -139,7 +143,7 @@ fn make_json() -> String {
     if record_count > 0 {
         contents.pop();
     }
-    contents.push_str("\n}");
+    contents.push_str("\n}\n");
     contents
 }
 
@@ -152,7 +156,7 @@ fn main() {
             let mut file = maybe_file.unwrap();
             match write!(file, "{}", make_json()) {
                 Err(_) => error!("couldn't write to json"),
-                Ok(_) => ()
+                Ok(_) => drop(file)
             };
         }
         thread::sleep(time::Duration::from_secs(30));
